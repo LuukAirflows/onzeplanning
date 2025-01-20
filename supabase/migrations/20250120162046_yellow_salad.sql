@@ -1,5 +1,5 @@
 /*
-  # Temporarily disable all RLS to restore functionality
+  # Disable all RLS to restore basic functionality
 */
 
 -- Drop ALL existing policies
