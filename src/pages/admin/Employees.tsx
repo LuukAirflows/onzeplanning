@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Plus, Search, X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import toast from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
 
 interface Employee {
   id: string;
@@ -25,20 +26,110 @@ interface EmployeeSkill {
 }
 
 function Employees() {
+  const navigate = useNavigate();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [showAddSkillModal, setShowAddSkillModal] = useState(false);
   const [showManageEmployeeSkillsModal, setShowManageEmployeeSkillsModal] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [newSkill, setNewSkill] = useState<{ name: string; description: string }>({
     name: '',
     description: '',
   });
+  const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
+  const [newEmployee, setNewEmployee] = useState({
+    email: '',
+    password: '',
+    first_name: '',
+    last_name: '',
+    role: 'employee' as const
+  });
 
   useEffect(() => {
-    loadEmployees();
-    loadSkills();
+    checkAuth();
   }, []);
+
+  useEffect(() => {
+    if (currentUser?.role === 'admin') {
+      loadEmployees();
+      loadSkills();
+    }
+  }, [currentUser]);
+
+  const checkAuth = async () => {
+    try {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError) {
+        console.error('Session error:', sessionError);
+        throw sessionError;
+      }
+
+      if (!session) {
+        toast.error('Je moet ingelogd zijn om deze pagina te bekijken');
+        navigate('/login');
+        return;
+      }
+
+      console.log('Current session:', session);
+
+      // Check if user is admin
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('id, email, role, first_name, last_name')
+        .eq('email', session.user.email)
+        .single();
+
+      if (userError) {
+        console.error('User data error:', userError);
+        throw userError;
+      }
+
+      console.log('User data:', userData);
+
+      if (!userData) {
+        console.error('No user data found');
+        // Als de user niet bestaat, maken we deze aan
+        const { data: newUser, error: createError } = await supabase
+          .from('users')
+          .insert([
+            {
+              id: session.user.id,
+              email: session.user.email,
+              role: 'admin',  // Alleen voor admin@hotnetworkz.nl
+              first_name: 'Admin',
+              last_name: 'User'
+            }
+          ])
+          .select()
+          .single();
+
+        if (createError) {
+          console.error('Error creating user:', createError);
+          throw createError;
+        }
+
+        setCurrentUser(newUser);
+        return;
+      }
+
+      if (userData.role !== 'admin') {
+        toast.error('Je hebt geen toegang tot deze pagina');
+        navigate('/');
+        return;
+      }
+
+      setCurrentUser(userData);
+    } catch (error) {
+      console.error('Auth check error:', error);
+      toast.error('Er is een fout opgetreden bij het controleren van je toegang');
+      navigate('/login');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const loadEmployees = async () => {
     try {
@@ -132,6 +223,11 @@ function Employees() {
 
   const addEmployeeSkill = async (employeeId: string, skillId: string) => {
     try {
+      if (!currentUser?.id || currentUser.role !== 'admin') {
+        toast.error('Je hebt geen rechten om vaardigheden toe te voegen');
+        return;
+      }
+
       const { error } = await supabase
         .from('employee_skills')
         .insert([
@@ -141,7 +237,10 @@ function Employees() {
           },
         ]);
 
-      if (error) throw error;
+      if (error) {
+        console.error('Detailed error:', error);
+        throw error;
+      }
 
       toast.success('Vaardigheid toegekend aan werknemer');
       loadEmployees();
@@ -173,6 +272,73 @@ function Employees() {
     return employee.employee_skills.some(skill => skill.skill_id === skillId);
   };
 
+  const addEmployee = async () => {
+    try {
+      // Gebruik de normale signup methode
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: newEmployee.email,
+        password: newEmployee.password,
+        options: {
+          data: {
+            first_name: newEmployee.first_name,
+            last_name: newEmployee.last_name,
+            role: newEmployee.role
+          },
+          emailRedirectTo: `${window.location.origin}/login`
+        }
+      });
+
+      if (authError) {
+        console.error('Auth error:', authError);
+        throw authError;
+      }
+
+      console.log('Auth response:', authData);
+
+      if (!authData.user) {
+        throw new Error('Geen gebruiker aangemaakt');
+      }
+
+      // Dan de user data toevoegen
+      const { error: userError } = await supabase
+        .from('users')
+        .insert([
+          {
+            id: authData.user.id,
+            email: newEmployee.email,
+            first_name: newEmployee.first_name,
+            last_name: newEmployee.last_name,
+            role: newEmployee.role
+          }
+        ]);
+
+      if (userError) {
+        console.error('User error:', userError);
+        throw userError;
+      }
+
+      toast.success(`Werknemer succesvol toegevoegd. Een bevestigingsmail is verstuurd naar ${newEmployee.email}`);
+      setNewEmployee({
+        email: '',
+        password: '',
+        first_name: '',
+        last_name: '',
+        role: 'employee'
+      });
+      setShowAddEmployeeModal(false);
+      loadEmployees();
+    } catch (error: any) {
+      console.error('Error adding employee:', error);
+      toast.error(error.message || 'Fout bij het toevoegen van werknemer');
+    }
+  };
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center min-h-screen">
+      <div className="text-lg">Laden...</div>
+    </div>;
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -182,7 +348,7 @@ function Employees() {
             <Plus className="w-4 h-4 mr-2" />
             Vaardigheden Beheren
           </Button>
-          <Button>
+          <Button onClick={() => setShowAddEmployeeModal(true)}>
             <Plus className="w-4 h-4 mr-2" />
             Werknemer Toevoegen
           </Button>
@@ -388,6 +554,68 @@ function Employees() {
             <div className="flex justify-end mt-4">
               <Button variant="outline" onClick={() => setShowManageEmployeeSkillsModal(false)}>
                 Sluiten
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Employee Modal */}
+      {showAddEmployeeModal && (
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium">Nieuwe Werknemer Toevoegen</h3>
+              <button onClick={() => setShowAddEmployeeModal(false)}>
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Voornaam</label>
+                <input
+                  type="text"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm"
+                  value={newEmployee.first_name}
+                  onChange={(e) => setNewEmployee({ ...newEmployee, first_name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Achternaam</label>
+                <input
+                  type="text"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm"
+                  value={newEmployee.last_name}
+                  onChange={(e) => setNewEmployee({ ...newEmployee, last_name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Email</label>
+                <input
+                  type="email"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm"
+                  value={newEmployee.email}
+                  onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Wachtwoord</label>
+                <input
+                  type="password"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm"
+                  value={newEmployee.password}
+                  onChange={(e) => setNewEmployee({ ...newEmployee, password: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end space-x-3">
+              <Button variant="outline" onClick={() => setShowAddEmployeeModal(false)}>
+                Annuleren
+              </Button>
+              <Button onClick={addEmployee}>
+                Toevoegen
               </Button>
             </div>
           </div>

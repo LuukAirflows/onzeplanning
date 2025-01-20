@@ -35,21 +35,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { data: { session }, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
       
-      if (error) throw error;
+      if (error) {
+        console.error('Auth error:', error);
+        throw new Error('Ongeldige inloggegevens');
+      }
+
+      if (!session?.user) {
+        throw new Error('Geen sessie na inloggen');
+      }
 
       // Fetch user role from the users table
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('role')
         .eq('email', email)
-        .single();
+        .maybeSingle();
 
-      if (userError) throw userError;
+      if (userError) {
+        console.error('User data error:', userError);
+        throw new Error('Kon gebruikersgegevens niet ophalen');
+      }
+
+      if (!userData) {
+        throw new Error('Gebruiker niet gevonden');
+      }
 
       // Navigate based on role
       if (userData.role === 'admin') {
@@ -59,7 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (error: any) {
       console.error('Sign in error:', error);
-      throw new Error('Invalid credentials');
+      throw error;
     }
   };
 
@@ -68,23 +82,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       navigate('/login');
-      toast.success('Successfully signed out');
-    } catch (error: any) {
+    } catch (error) {
       console.error('Sign out error:', error);
-      toast.error('Error signing out');
+      toast.error('Er is een fout opgetreden bij het uitloggen');
     }
   };
 
-  const value = {
-    user,
-    loading,
-    signIn,
-    signOut,
-  };
-
   return (
-    <AuthContext.Provider value={value}>
-      {!loading && children}
+    <AuthContext.Provider value={{ user, loading, signIn, signOut }}>
+      {children}
     </AuthContext.Provider>
   );
 }
